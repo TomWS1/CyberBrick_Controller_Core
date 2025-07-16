@@ -102,6 +102,7 @@ while True:
     if msg == None:
       # Failsafe
       # Motor off, no change to steering
+      #print("Failsafe!")
       M1A.duty_u16(0)
       M1B.duty_u16(0)
       # blinking red LEDs
