@@ -6,7 +6,6 @@ import network
 import espnow
 from neopixel import NeoPixel
 import time
-import asyncio
 
 """
 The outgoing telegram via ESP-NOW is the following:
@@ -120,47 +119,50 @@ except OSError as err:
 # Drive NeoPixel on CyberBrick Core
 npcore = Pin(8, Pin.OUT)
 np = NeoPixel(npcore, 1)
-
-# Async function to send messages
-async def send_messages(e, peer):
-    val = 16
-    while True:
+val = 16
+while True:
+    try:
+        message = f"{l1.read()},{l2.read()},{l3.read()},{r1.read()},{r2.read()},{r3.read()},{k1.value()},{k2.value()},{k3.value()},{k4.value()}"
         try:
-            message = f"{l1.read()},{l2.read()},{l3.read()},{r1.read()},{r2.read()},{r3.read()},{k1.value()},{k2.value()},{k3.value()},{k4.value()}"
-            if not e.send(peer, message, True):
-                e.active(False)
-                wifi_reset()
-                enow_reset()
-
-            #==========================================
-            # "Breathing" LED effect in violet tone
-            if (val > 255):
-              np[0] = ((int)((511-val)/2), 0, (511-val))
-            else:
-              np[0] = ((int)(val/2), 0, val)
-            np.write()
-            val = val + 8 # NeoPixel intensity change step size
-            if val > (511-16):
-              val = 16
-
-
-            time.sleep(0.02) # Send every 20 milliseconds / @50 Hz
-        
+            e.get_peer(receiver_mac)
         except OSError as err:
-            print("Error:", err)
-            time.sleep(0.5)
+            if err.errno == -12393: # ESP_ERR_ESPNOW_NOT_FOUND
+                peer_num, encrypt_num = e.peer_count()
+                if peer_num > 0:
+                    peers = e.get_peers()
+                    e.del_peer(peers[0][0])
+                try:
+                    e.add_peer(receiver_mac)
+                except OSError as err:
+                    print("Failed to add peer:", err)
+
+        if not e.send(receiver_mac, message, True):
+            val = 16   # not breathing
             e.active(False)
             wifi_reset()
             enow_reset()
 
-# Main async function
-async def main(e, peer):
-    await send_messages(e, peer)
+        #==========================================
+        # "Breathing" LED effect in violet tone
+        if (val > 255):
+          np[0] = ((int)((511-val)/2), 0, (511-val))
+        else:
+          np[0] = ((int)(val/2), 0, val)
+        np.write()
+        val = val + 8 # NeoPixel intensity change step size
+        if val > (511-16):
+          val = 16
 
-# Run the async program
-try:
-    asyncio.run(main(e, receiver_mac))
-except KeyboardInterrupt:
-    print("Stopping sender...")
-    e.active(False)
-    sta.active(False)
+
+        time.sleep(0.02) # Send every 20 milliseconds / @50 Hz
+        
+    except OSError as err:
+        print("Error:", err)
+        time.sleep(0.5)
+        e.active(False)
+        wifi_reset()
+        enow_reset()
+        
+    except KeyboardInterrupt:
+        print("Stopping sender...")
+        e.active(False)
