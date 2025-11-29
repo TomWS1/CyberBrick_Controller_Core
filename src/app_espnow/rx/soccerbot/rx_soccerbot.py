@@ -8,8 +8,8 @@
 # * Servo2: not used
 # * Servo3: not used
 # * Servo4: not used
-# * Motor1: channel 2 (Left vertical (LV) stick) 
-# * Motor2: channel 5 (Right vertical (RV) stick)
+# * Motor1: channel 2 (Left tread) 
+# * Motor2: channel 5 (Right tread)
 # * NeoPixel Builtin: left on at dim green
 # * NeoPixel_Channel1: not driven by this code
 # * NeoPixel_Channel2: Headlights and 'show off'
@@ -20,9 +20,9 @@
 The incoming telegram via ESP-NOW is expected in the following order:
  1)  ch0 L1, unsigned 12-bit value   (3-way switch on Cyberbrick official standard remote)
  2)  ch1 L2, unsigned 12-bit value   (Left horizontal (LH) stick)
- 3)  ch2 L3, unsigned 12-bit value   (Left vertical (LV) stick)
- 4)  ch3 R1, unsigned 12-bit value   (Slider)
- 5)  ch4 R2, unsigned 12-bit value   (Right horizontal (RH) stick)
+ 3)  ch2 L3, unsigned 12-bit value   (Left vertical (LV) stick - used for speed control)
+ 4)  ch3 R1, unsigned 12-bit value   (Slider - used for picking up and 'tossing' the soccerball)
+ 5)  ch4 R2, unsigned 12-bit value   (Right horizontal (RH) stick - used for steering)
  6)  ch5 R3, unsigned 12-bit value   (Right vertical (LH) stick)
  7)  ch6 K1, 1-bit value, low-active (Button) - Used to Null Joysticks, sequence lights
  8)  ch7 K2, 1-bit value, low-active (Not used)
@@ -37,10 +37,11 @@ import asyncio
 from neopixel import NeoPixel
 import utime
 
-RIGHT_STICK = 5    # Right Vertical Stick, used for Turning Direction
-LEFT_STICK = 2    # Left Vertical Stick, used for walking speed
+RIGHT_STICK = 4    # Right Horizontal Stick, used for Steering
+LEFT_STICK = 2    # Left Vertical Stick, used for speed (FWD & BKWD)
 SLIDER = 3
 BUTTON = 6
+MAX_STEERING = 1800 # limit range of steering control due to inaccuracy of joysticks (can't travel all the way between +/- 2047)
 
 # Initialize motors output to idle (a brushed motor is controlled via 2 pins on HTD8811)
 M1A = PWM(Pin(4), freq=100, duty_u16=0)
@@ -197,51 +198,58 @@ while True:
             setLedColor(color_index)
 
         # set speeds based on above/equal/below midpoints
-        m1_speed = 0
-        m2_speed = 0
+        speed = 0
+        steering = 0
+        turnMult = 1.0  # no difference in tread speeds
 
-        if ((left_stick < (midpoint_left+deadzoneplusminus)) and (left_stick > (midpoint_left-deadzoneplusminus))):
+        if ((left_stick < (midpoint_left+deadzoneplusminus)) and (left_stick > (midpoint_left - deadzoneplusminus))):
           # motion stopped
-          m1_speed = 0
+          speed = 0
         else:
           if (left_stick > midpoint_left):
-            m1_speed = min(32*(left_stick-midpoint_left), 65535)
+            speed = min(32*(left_stick - midpoint_left), 65535)
           else:
-            m1_speed = min(32*(midpoint_left-left_stick), 65535)
+            speed = min(32*(midpoint_left - left_stick), 65535)
 
-        if ((right_stick < (midpoint_right+deadzoneplusminus)) and (right_stick > (midpoint_right-deadzoneplusminus))):
-          # motion stopped
-          m2_speed = 0
+        if ((right_stick < (midpoint_right+deadzoneplusminus)) and (right_stick > (midpoint_right - deadzoneplusminus))):
+          # steering centered
+          steering = 0
         else:
-          if (right_stick > midpoint_right):
-            m2_speed = min(32*(right_stick-midpoint_right), 65535)
-          else:
-            m2_speed = min(32*(midpoint_right-right_stick), 65535)
+          steering = right_stick - midpoint_right
 
-
-        if (m1_speed == 0):
-          M1A.duty_u16(0)
-          M1B.duty_u16(0)
+        if (speed == 0):
+          stop_motors()
 
         else:
-          if (left_stick > midpoint_left):
+          left_speed = speed
+          right_speed = speed
+          # For steering control, the steering controls the proportion of right/left speed on the two treads
+          # steering = 0, speed is equal on both treads
+          # steering > midpoint then the left speed is 100% while the right is reduced from 100% to 0% depending on amount of steering
+          # Note: Steering value range is limited to 1800 due to inaccurracy of controls
+          if (steering > 0):   # Right Turn (Right Tread reduced speed)
+            steering = min(steering, MAX_STEERING)
+            turnMult = (MAX_STEERING - steering)/MAX_STEERING
+            right_speed = int(speed * turnMult)
+
+          if (steering < 0):
+            steering = min(steering, -MAX_STEERING)
+            turnMult = (MAX_STEERING + steering)/MAX_STEERING
+            left_speed = int(speed * turnMult)
+
+          if (left_speed > 0):
               M1B.duty_u16(0)
-              M1A.duty_u16(m1_speed)
+              M1A.duty_u16(left_speed)
           else:
               M1A.duty_u16(0)
-              M1B.duty_u16(m1_speed)
+              M1B.duty_u16(left_speed)
 
-        if (m2_speed == 0):
-          M2A.duty_u16(0)
-          M2B.duty_u16(0)
-
-        else:
-          if (right_stick > midpoint_right):
+          if (right_speed > 0):
               M2B.duty_u16(0)
-              M2A.duty_u16(m2_speed)
+              M2A.duty_u16(right_speed)
           else:
               M2A.duty_u16(0)
-              M2B.duty_u16(m2_speed)
+              M2B.duty_u16(right_speed)
 
         # Ok, is the tosser to be activated???
         # 1 to 2ms range for 0 to 4095 input value
@@ -249,7 +257,7 @@ while True:
 
 
         if ((printloopctr%20) == 0):
-          print("left:{}; right:{}; tosser:{}; b:{};".format(m1_speed, m2_speed, tosser, button))
+          print("left:{}; right:{}; tosser:{}; b:{};".format(speed, steering, tosser, button))
 
         printloopctr += 1
 
