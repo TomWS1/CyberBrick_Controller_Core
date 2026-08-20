@@ -4,168 +4,204 @@
 # https://makerworld.com/de/models/1395994-cyberbrick-official-forklift
 #
 # The outputs of X11 shield are driven from following inputs:
-# * Servo1: channel 3 (slider)
-# * Servo2: channel 5 (right vertical stick)
-# * Servo3: channel 1 not driven by this code
-# * Servo4: channel 3 not driven by this code
+# * Servo1: channel 4 (slider) - controls Fork up/down
+# * Servo2: not driven by this code
+# * Servo3: not driven by this code
+# * Servo4: 3 not driven by this code
 # * Motor1: right track (mix of channel 2 (left vertical stick) and channel 4 (right horizontal stick))
 # * Motor2: left track  (mix of channel 2 (left vertical stick) and channel 4 (right horizontal stick))
 # * NeoPixel_Channel1: not driven by this code
-# * NeoPixel_Channel2: driven in code by 3-way switch position
+# * NeoPixel_Channel2: driven in code by 3-way switch position (Lights come on when Forklift is receiving data, either some throttle or some lift)
 
-# In CyberBrick official forklift, the 2 NeoPixels are alls connected to channel2, 1 - Right, 2 - Left
+# In CyberBrick official forklift, the 2 NeoPixels are all connected to channel2, 1 - Right, 2 - Left (Lights come on when Forklift is receiving data, either some throttle or some lift)
 
 """
 The incoming telegram via ESP-NOW is expected in the following order:
- 1)  ch0 L1, unsigned 12-bit value   (3-way switch on Cyberbrick official standard remote)
- 2)  ch1 L2, unsigned 12-bit value   (Left horizontal (LH) stick)
- 3)  ch2 L3, unsigned 12-bit value   (Left vertical (LV) stick)
+ 1)  ch0 L1, unsigned 12-bit value   (3-way switch on Cyberbrick official standard remote) - ultimately will select device (Not currently Used)
+ 2)  ch1 L2, unsigned 12-bit value   (Left horizontal (LH) stick) (Not Used)
+ 3)  ch2 L3, unsigned 12-bit value   (Left vertical (LV) stick) - Throttle
  4)  ch3 R1, unsigned 12-bit value   (Slider)
- 5)  ch4 R2, unsigned 12-bit value   (Right horizontal (RH) stick)
- 6)  ch5 R3, unsigned 12-bit value   (Right vertical (LH) stick)
- 7)  ch6 K1, 1-bit value, low-active (Button)
+ 5)  ch4 R2, unsigned 12-bit value   (Right horizontal (RH) stick) - Steering
+ 6)  ch5 R3, unsigned 12-bit value   (Right vertical (LH) stick) (Not Used)
+ 7)  ch6 K1, 1-bit value, low-active (Button) - Used to Null Joysticks
  8)  ch7 K2, 1-bit value, low-active (Not used)
  9)  ch9 K3, 1-bit value, low-active (Not used)
 10) ch10 K4, 1-bit value, low-active (Not used)
 """
 
-import network
-import aioespnow
-import asyncio
 from machine import Pin, PWM
+import network
+import espnow
+import asyncio
 from neopixel import NeoPixel
 import utime
 
-# Initialize Wi-Fi in station mode
-sta = network.WLAN(network.STA_IF)
-sta.active(True)
-mac = sta.config('mac')
-mac_address = ':'.join('%02x' % b for b in mac)
-print("MAC address of the receiver:", mac_address)
-sta.config(channel=1)  # Set channel explicitly if packets are not received
-sta.disconnect()
+# Drive NeoPixel on CyberBrick Core
+npcore = Pin(8, Pin.OUT)
+np = NeoPixel(npcore, 1)
+np[0] = (0, 10, 0) # dim green
+np.write()
 
-# Initialize AIOESPNow
-e = aioespnow.AIOESPNow()
-try:
-    e.active(True)
-except OSError as err:
-    print("Failed to initialize AIOESPNow:", err)
-    raise
+# Initialize all servo outputs with 1.5ms pulse length in 20ms period
+S1 = PWM(Pin(3), freq=50, duty_u16=4915) # servo center 1.5ms equals to 65535/20 * 1.5 = 4915
+#S2 = PWM(Pin(2), freq=50, duty_u16=4915)
+#S3 = PWM(Pin(1), freq=50, duty_u16=4915)
+#S4 = PWM(Pin(0), freq=50, duty_u16=4915)
 
-print("Initialized AIOESPNow")
+# Initialize motor 1 and 2 outputs to idle (a brushed motor is controlled via 2 pins on HTD8811)
+M1A = PWM(Pin(4), freq=100, duty_u16=0)
+M1B = PWM(Pin(5), freq=100, duty_u16=0)
+M2A = PWM(Pin(6), freq=100, duty_u16=0)
+M2B = PWM(Pin(7), freq=100, duty_u16=0)
 
-# Async function to receive messages
-async def receive_messages(e):
-    # Drive NeoPixel on CyberBrick Core
-    npcore = Pin(8, Pin.OUT)
-    np = NeoPixel(npcore, 1)
-    np[0] = (0, 10, 0) # dim green
-    np.write()
+#Initialize NeoPixel LED string 2 with 2 pixels
+LEDstring2pin = Pin(20, Pin.OUT)
+LEDstring2 = NeoPixel(LEDstring2pin, 2)
+for i in range(2):
+  LEDstring2[i] = (0, 0, 0) # default all off
+LEDstring2.write()
 
-    # Initialize all servo outputs with 1.5ms pulse length in 20ms period
-    S1 = PWM(Pin(3), freq=50, duty_u16=4915) # servo center 1.5ms equals to 65535/20 * 1.5 = 4915
-    S2 = PWM(Pin(2), freq=50, duty_u16=4915)
-    #S3 = PWM(Pin(1), freq=50, duty_u16=4915)
-    #S4 = PWM(Pin(0), freq=50, duty_u16=4915)
+sliderthrright    = 1365 # 1/3 of 4095 
+sliderthrleft     = 2730 # 2/3 of 4095
+blinkertime_ms    = 500  # 2 Hz
+midpoint          = 2047
+deadzoneplusminus = 100
 
-    # Initialize motor 1 and 2 outputs to idle (a brushed motor is controlled via 2 pins on HTD8811)
-    M1A = PWM(Pin(4), freq=100, duty_u16=0)
-    M1B = PWM(Pin(5), freq=100, duty_u16=0)
-    M2A = PWM(Pin(6), freq=100, duty_u16=0)
-    M2B = PWM(Pin(7), freq=100, duty_u16=0)
 
-    #Initialize NeoPixel LED string 2 with 2 pixels
-    LEDstring2pin = Pin(20, Pin.OUT)
-    LEDstring2 = NeoPixel(LEDstring2pin, 2)
-    for i in range(2):
-      LEDstring2[i] = (0, 0, 0) # default all off
-    LEDstring2.write()
+def wifi_reset():
+  # Reset Wi-Fi to AP_IF off, STA_IF on and disconnected
+  sta = network.WLAN(network.WLAN.IF_STA); sta.active(False)
+  ap = network.WLAN(network.WLAN.IF_AP); ap.active(False)
+  sta.active(True)
+  while not sta.active():
+      time.sleep(0.1)
+  while sta.isconnected():
+      time.sleep(0.1)
+  sta = network.WLAN(network.STA_IF)
+  sta.active(True)
+  sta.config(channel=1,pm=sta.PM_NONE,reconnects=0)
+  sta.disconnect()
 
-    sliderthrright    = 1365 # 1/3 of 4095 
-    sliderthrleft     = 2730 # 2/3 of 4095
-    blinkertime_ms    = 500  # 2 Hz
-    midpoint          = 2047
-    deadzoneplusminus = 100
+wifi_reset()
 
-    while True:
-        try:
-            async for mac, msg in e:
-                rxch = msg.decode().split(",")
-                if len(rxch) == 10:
-                  lightcontrol = int(rxch[0]) # 3-way switch
-                  if (lightcontrol > sliderthrleft):
-                     LEDstring2[0] = (255, 255, 255) # Right white
-                     LEDstring2[1] = (255, 255, 255) # Left white
-                  elif (lightcontrol < sliderthrright):
-                     #Yellow blinking lights
-                     if ((utime.ticks_ms() % blinkertime_ms) > (blinkertime_ms / 2)):
-                        LEDstring2[0] = (0, 0, 0) # Right dark
-                        LEDstring2[1] = (255, 255, 0) # Left yellow
-                     else:
-                        LEDstring2[0] = (255, 255, 0) # Right yellow
-                        LEDstring2[1] = (0, 0, 0) # Left dark
-                  else:
-                    LEDstring2[0] = (0, 0, 0) # Right dark
-                    LEDstring2[1] = (0, 0, 0) # Left dark
-                  LEDstring2.write()
+# Initialize ESP-NOW
+e = espnow.ESPNow()
 
-                  # 0.5 to 2.5ms range for 0 to 4095 input value
-                  fork = int(rxch[3])
-                  S1.duty_u16(int(((float(fork)*6554)/4095 + 1638)))
-                  # 1 to 2ms range for 0 to 4095 input value
-                  S2.duty_u16(int(((float(rxch[5])*3277)/4095 + 3277)))
-                  # 0.5 to 2.5ms range for 0 to 4095 input value
-                  #S3.duty_u16(int(((float(rxch[2])*6554)/4095 + 1638)))
-                  #S4.duty_u16(int(((float(rxch[1])*6554)/4095 + 1638)))
-                  
-                  steering = int(rxch[4])
-                  throttle = int(rxch[2])
-                  
-                  lefttrack = int(((steering-midpoint) + (throttle-midpoint))/2 + midpoint)
-                  righttrack = int(((steering-midpoint) - (throttle-midpoint))/2 + midpoint)
-                  
-                  if ((righttrack < (midpoint+deadzoneplusminus)) and (righttrack > (midpoint-deadzoneplusminus))):
-                    #deadzone - no forward/backward movement
-                    M1A.duty_u16(0)
-                    M1B.duty_u16(0)
-                  else:
-                    if righttrack > midpoint:
-                      # backwards
-                      M1A.duty_u16(min(32*(righttrack-midpoint), 65535))
-                      M1B.duty_u16(0)
-                    else:
-                      # forwards
-                      M1A.duty_u16(0)
-                      M1B.duty_u16(min(32*(midpoint-righttrack), 65535))
-                  
-                  if ((lefttrack < (midpoint+deadzoneplusminus)) and (lefttrack > (midpoint-deadzoneplusminus))):
-                    #deadzone - no forward/backward movement
-                    M2A.duty_u16(0)
-                    M2B.duty_u16(0)
-                  else:
-                    if lefttrack > midpoint:
-                      # backwards
-                      M2A.duty_u16(min(32*(lefttrack-midpoint), 65535))
-                      M2B.duty_u16(0)
-                    else:
-                      # forwards
-                      M2A.duty_u16(0)
-                      M2B.duty_u16(min(32*(midpoint-lefttrack), 65535))
+def enow_reset():
+  try:
+      e.active(True)
+  except OSError as err:
+      print("Failed to initialize ESP-NOW:", err)
+      raise
 
-        except OSError as err:
-            print("Error:", err)
-            await asyncio.sleep(0.5)
-            
-# Main async function
-async def main(e):
-    # Run receive and stats tasks concurrently
-    await asyncio.gather(receive_messages(e))
+enow_reset()
 
-# Run the async program
-try:
-    asyncio.run(main(e))
-except KeyboardInterrupt:
+##############################################
+# Message Loop
+##############################################
+
+while True:
+  try:
+    # Receive message (host MAC, message, 500ms failsafe timeout)
+    host, msg = e.recv(500)
+    if msg == None:
+      # Failsafe
+      # Motor off, no change to steering
+      M1A.duty_u16(0)
+      M1B.duty_u16(0)
+      # blinking red LEDs
+      if ((utime.ticks_ms() % blinkertime_ms) > (blinkertime_ms / 2)):
+        print("n.")
+        for i in range(2):
+          LEDstring2[i] = (0, 0, 0) # All dark
+      else:
+        for i in range(2):
+          LEDstring2[i] = (255, 0, 0) # All red
+      LEDstring2.write()
+
+      e.active(False)
+      wifi_reset()
+      enow_reset()
+    
+    else:
+        rxch = msg.decode().split(",")
+        if ((utime.ticks_ms() % blinkertime_ms) > (blinkertime_ms / 2)):
+          print("rxch:{}\n",rxch)
+        if len(rxch) == 10:
+          lightcontrol = int(rxch[0]) # 3-way switch
+          if (lightcontrol > sliderthrleft):
+             LEDstring2[0] = (255, 255, 255) # Right white
+             LEDstring2[1] = (255, 255, 255) # Left white
+          elif (lightcontrol < sliderthrright):
+             #Yellow blinking lights
+             if ((utime.ticks_ms() % blinkertime_ms) > (blinkertime_ms / 2)):
+                LEDstring2[0] = (0, 0, 0) # Right dark
+                LEDstring2[1] = (255, 255, 0) # Left yellow
+             else:
+                LEDstring2[0] = (255, 255, 0) # Right yellow
+                LEDstring2[1] = (0, 0, 0) # Left dark
+          else:
+            LEDstring2[0] = (0, 0, 0) # Right dark
+            LEDstring2[1] = (0, 0, 0) # Left dark
+          LEDstring2.write()
+
+          # 0.5 to 2.5ms range for 0 to 4095 input value
+          fork = int(rxch[3])
+          S1.duty_u16(int(((float(fork)*6554)/4095 + 1638)))
+          # 1 to 2ms range for 0 to 4095 input value
+          #S2.duty_u16(int(((float(rxch[5])*3277)/4095 + 3277)))
+          # 0.5 to 2.5ms range for 0 to 4095 input value
+          #S3.duty_u16(int(((float(rxch[2])*6554)/4095 + 1638)))
+          #S4.duty_u16(int(((float(rxch[1])*6554)/4095 + 1638)))
+          
+          steering = int(rxch[4])
+          throttle = int(rxch[2])
+          
+          lefttrack = int(((steering-midpoint) + (throttle-midpoint))/2 + midpoint)
+          righttrack = int(((steering-midpoint) - (throttle-midpoint))/2 + midpoint)
+          
+          if ((righttrack < (midpoint+deadzoneplusminus)) and (righttrack > (midpoint-deadzoneplusminus))):
+            #deadzone - no forward/backward movement
+            M1A.duty_u16(0)
+            M1B.duty_u16(0)
+          else:
+            if righttrack > midpoint:
+              # backwards
+              M1A.duty_u16(min(32*(righttrack-midpoint), 65535))
+              M1B.duty_u16(0)
+            else:
+              # forwards
+              M1A.duty_u16(0)
+              M1B.duty_u16(min(32*(midpoint-righttrack), 65535))
+          
+          if ((lefttrack < (midpoint+deadzoneplusminus)) and (lefttrack > (midpoint-deadzoneplusminus))):
+            #deadzone - no forward/backward movement
+            M2A.duty_u16(0)
+            M2B.duty_u16(0)
+          else:
+            if lefttrack > midpoint:
+              # backwards
+              M2A.duty_u16(min(32*(lefttrack-midpoint), 65535))
+              M2B.duty_u16(0)
+            else:
+              # forwards
+              M2A.duty_u16(0)
+              M2B.duty_u16(min(32*(midpoint-lefttrack), 65535))
+
+        else:
+            if ((utime.ticks_ms() % blinkertime_ms) > (blinkertime_ms / 2)):
+                print("m.")
+
+  except OSError as err:
+    print("Error:", err)
+    time.sleep(0.5)
+    e.active(False)
+    wifi_reset()
+    enow_reset()
+
+  except KeyboardInterrupt:
     print("Stopping receiver...")
     e.active(False)
-    sta.active(False)
+    wifi_reset()
+    enow_reset()
+    break
