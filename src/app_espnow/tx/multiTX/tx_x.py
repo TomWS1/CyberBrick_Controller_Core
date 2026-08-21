@@ -9,7 +9,7 @@ import time
 
 """
 The outgoing telegram via ESP-NOW is the following:
-1) L1, unsigned 12-bit value (3-way switch on Cyberbrick official standard remote)
+1) L1, unsigned 12-bit value (3-way switch on Cyberbrick official standard remote) - might be used to select which device to send to
 2) L2, unsigned 12-bit value (Left horizontal (LH) stick)
 3) L3, unsigned 12-bit value (Left vertical (LV) stick)
 4) R1, unsigned 12-bit value (Slider)
@@ -104,7 +104,7 @@ except OSError as e:
 
 # macs_obj is a list of devices and mac address strings, iterate through to usable list of devices and mac addresses
 all_macs = []
-for mac_obj in macs_obj:
+for i, mac_obj in enumerate(macs_obj):
     if len(all_macs) >= 3:
         print("Too Many Receivers!")
         raise
@@ -114,7 +114,7 @@ for mac_obj in macs_obj:
     all_macs.append(receiver_mac)
 
     mac_address = ':'.join('%02x' % b for b in receiver_mac)
-    print("MAC address of the receiver:", mac_address)
+    print("MAC address of the receiver:{} {}", mac_address,i)
 
 
 # for each device Add peer
@@ -132,24 +132,26 @@ val = 16
 while True:
     try:
         message = f"{l1.read()},{l2.read()},{l3.read()},{r1.read()},{r2.read()},{r3.read()},{k1.value()},{k2.value()},{k3.value()},{k4.value()}"
-        try:
-            e.get_peer(receiver_mac)
-        except OSError as err:
-            if err.errno == -12393: # ESP_ERR_ESPNOW_NOT_FOUND
-                peer_num, encrypt_num = e.peer_count()
-                if peer_num > 0:
-                    peers = e.get_peers()
-                    e.del_peer(peers[0][0])
-                try:
-                    e.add_peer(receiver_mac)
-                except OSError as err:
-                    print("Failed to add peer:", err)
+        for receiver_mac in all_macs:
 
-        if not e.send(receiver_mac, message, True):
-            val = 16   # not breathing
-            e.active(False)
-            wifi_reset()
-            enow_reset()
+            try:
+                e.get_peer(receiver_mac)
+            except OSError as err:
+                if err.errno == -12393: # ESP_ERR_ESPNOW_NOT_FOUND
+                    peer_num, encrypt_num = e.peer_count()
+                    if peer_num > 0:
+                        peers = e.get_peers()
+                        e.del_peer(peers[0][0])
+                    try:
+                        e.add_peer(receiver_mac)
+                    except OSError as err:
+                        print("Failed to add peer:", err)
+
+            if not e.send(receiver_mac, message, True):
+                val = 16   # not breathing
+                e.active(False)
+                wifi_reset()
+                enow_reset()
 
         #==========================================
         # "Breathing" LED effect in violet tone

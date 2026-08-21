@@ -18,10 +18,10 @@
 """
 The incoming telegram via ESP-NOW is expected in the following order:
  1)  ch0 L1, unsigned 12-bit value   (3-way switch on Cyberbrick official standard remote) - ultimately will select device (Not currently Used)
- 2)  ch1 L2, unsigned 12-bit value   (Left horizontal (LH) stick) (Not Used)
+ 2)  ch1 L2, unsigned 12-bit value   (Left horizontal (LH) stick) - Steering
  3)  ch2 L3, unsigned 12-bit value   (Left vertical (LV) stick) - Throttle
  4)  ch3 R1, unsigned 12-bit value   (Slider)
- 5)  ch4 R2, unsigned 12-bit value   (Right horizontal (RH) stick) - Steering
+ 5)  ch4 R2, unsigned 12-bit value   (Right horizontal (RH) stick)  (Not Used)
  6)  ch5 R3, unsigned 12-bit value   (Right vertical (LH) stick) (Not Used)
  7)  ch6 K1, 1-bit value, low-active (Button) - Used to Null Joysticks
  8)  ch7 K2, 1-bit value, low-active (Not used)
@@ -64,7 +64,8 @@ LEDstring2.write()
 sliderthrright    = 1365 # 1/3 of 4095 
 sliderthrleft     = 2730 # 2/3 of 4095
 blinkertime_ms    = 500  # 2 Hz
-midpoint          = 2047
+midpoint_th       = 2047
+midpoint_st       = 2047
 deadzoneplusminus = 100
 
 
@@ -135,10 +136,10 @@ while True:
           elif (lightcontrol < sliderthrright):
              #Yellow blinking lights
              if ((utime.ticks_ms() % blinkertime_ms) > (blinkertime_ms / 2)):
-                LEDstring2[0] = (0, 0, 0) # Right dark
+                LEDstring2[0] = (255, 255, 0) # Right yellow
                 LEDstring2[1] = (255, 255, 0) # Left yellow
              else:
-                LEDstring2[0] = (255, 255, 0) # Right yellow
+                LEDstring2[0] = (0, 0, 0) # Left dark
                 LEDstring2[1] = (0, 0, 0) # Left dark
           else:
             LEDstring2[0] = (0, 0, 0) # Right dark
@@ -154,39 +155,44 @@ while True:
           #S3.duty_u16(int(((float(rxch[2])*6554)/4095 + 1638)))
           #S4.duty_u16(int(((float(rxch[1])*6554)/4095 + 1638)))
           
-          steering = int(rxch[4])
+          steering = int(rxch[1])
           throttle = int(rxch[2])
+          button = int(rxch[6])
+          #deadzone update
+          if (button == 0): # is button pressed? =0
+              midpoint_th = int(rxch[2])   # set new midpoint
+              midpoint_st = int(rxch[1])   # set new midpoint
           
-          lefttrack = int(((steering-midpoint) + (throttle-midpoint))/2 + midpoint)
-          righttrack = int(((steering-midpoint) - (throttle-midpoint))/2 + midpoint)
+          lefttrack = int(((steering-midpoint_st) + (throttle-midpoint_th))/2 + midpoint_st)
+          righttrack = int(((steering-midpoint_st) - (throttle-midpoint_th))/2 + midpoint_st)
           
-          if ((righttrack < (midpoint+deadzoneplusminus)) and (righttrack > (midpoint-deadzoneplusminus))):
+          if ((righttrack < (midpoint_st+deadzoneplusminus)) and (righttrack > (midpoint_st-deadzoneplusminus))):
             #deadzone - no forward/backward movement
             M1A.duty_u16(0)
             M1B.duty_u16(0)
           else:
-            if righttrack > midpoint:
+            if righttrack > midpoint_st:
               # backwards
-              M1A.duty_u16(min(32*(righttrack-midpoint), 65535))
+              M1A.duty_u16(min(32*(righttrack-midpoint_st), 65535))
               M1B.duty_u16(0)
             else:
               # forwards
               M1A.duty_u16(0)
-              M1B.duty_u16(min(32*(midpoint-righttrack), 65535))
+              M1B.duty_u16(min(32*(midpoint_st-righttrack), 65535))
           
-          if ((lefttrack < (midpoint+deadzoneplusminus)) and (lefttrack > (midpoint-deadzoneplusminus))):
+          if ((lefttrack < (midpoint_st+deadzoneplusminus)) and (lefttrack > (midpoint_st-deadzoneplusminus))):
             #deadzone - no forward/backward movement
             M2A.duty_u16(0)
             M2B.duty_u16(0)
           else:
-            if lefttrack > midpoint:
+            if lefttrack > midpoint_st:
               # backwards
-              M2A.duty_u16(min(32*(lefttrack-midpoint), 65535))
+              M2A.duty_u16(min(32*(lefttrack-midpoint_st), 65535))
               M2B.duty_u16(0)
             else:
               # forwards
               M2A.duty_u16(0)
-              M2B.duty_u16(min(32*(midpoint-lefttrack), 65535))
+              M2B.duty_u16(min(32*(midpoint_st-lefttrack), 65535))
 
         else:
             if ((utime.ticks_ms() % blinkertime_ms) > (blinkertime_ms / 2)):

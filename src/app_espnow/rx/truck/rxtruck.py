@@ -5,7 +5,7 @@
 #
 # The outputs of X11 shield are driven from following inputs:
 # * Servo1: steering, channel 4 (right horizontal stick)
-# * Motor1: throttle, channel 2 (left vertical stick)
+# * Motor1: throttle, channel 5 (right vertical stick)
 # * NeoPixel_Channel2: driven in code by throttle (LV) and steering (RH)
 
 # In CyberBrick official truck, the 4 NeoPixels are all connected to channel2:
@@ -90,6 +90,9 @@ for i in range(4):
   LEDstring2[i] = (0, 0, 0) # default all off
 LEDstring2.write()
 
+
+sliderthrright    = 1365 # 1/3 of 4095 
+sliderthrleft     = 2730 # 2/3 of 4095
 blinkertime_ms    = 750  # 1.5 Hz
 midpoint_th       = 2047
 midpoint_st       = 2047
@@ -128,7 +131,7 @@ while True:
         button = int(rxch[6])
         #deadzone update
         if (button == 0): # is button pressed? =0
-          midpoint_th = int(rxch[2])   # set new midpoint
+          midpoint_th = int(rxch[5])   # set new midpoint
           midpoint_st = int(rxch[4])   # set new midpoint
 
         # 0.5 to 2.5ms range for 0 to 4095 input value
@@ -136,7 +139,13 @@ while True:
         #S3.duty_u16(int(((float(rxch[2])*6554)/4095 + 1638)))
         #S4.duty_u16(int(((float(rxch[1])*6554)/4095 + 1638)))
 
-        throttle = int(rxch[2])
+        # disable the truck unless the slider switch is all the way right
+        slider = int(rxch[0])
+        throttle = midpoint_th
+
+        if (slider < sliderthrright):
+          throttle = int(rxch[5])
+
         #deadzone check
         if ((throttle < (midpoint_th+deadzoneplusminus)) and (throttle > (midpoint_th-deadzoneplusminus))):
           #deadzone - no forward/backward movement
